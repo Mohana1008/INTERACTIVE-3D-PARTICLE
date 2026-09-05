@@ -16,7 +16,7 @@ A real-time, interactive 3D particle system built with Three.js that responds to
 This project processes all camera input locally in your browser. No video, images, or tracking data is ever uploaded, logged, or shared with any third party. Camera access requires explicit user permission and can be disabled at any time.
 
 ## 🚀 Getting Started
-[installation/run instructions here]
+clone this github repo and run on your code editor with live server
 
 ## 🛠️ Built With
 - [Three.js](https://threejs.org/)
