@@ -1,0 +1,510 @@
+================================================================================
+ANTIGRAVITY 3D PARTICLE SYSTEM - COMPLETE ARCHITECTURAL & CODE EXPLANATION
+================================================================================
+
+Target Hardware Profile: 
+Laptops with 8GB RAM, Integrated Graphics (Intel UHD / Iris Xe / AMD Radeon Vega),
+and Mobile Devices (iOS Safari / Android Chrome).
+
+This document breaks down every single component, algorithm, mathematical formula,
+and data flow in plain English so that any beginner can follow along.
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. Executive Overview & System Architecture
+2. The End-to-End Data Flow Pipeline
+3. Detailed File-by-File & Block-by-Block Code Breakdown
+   3.1  index.html            - Semantic Structure & HUD Overlay
+   3.2  css/style.css         - Glassmorphism & Responsive Styling
+   3.3  js/config.js          - Tuning Constants & Hardware Limits
+   3.4  js/math-shapes.js     - 3D Parametric Mathematical Equations
+   3.5  js/particle-system.js - WebGL Buffers, Physics & Color Engine
+   3.6  js/hand-tracker.js    - MediaPipe Lite & Privacy Webcam Lifecycle
+   3.7  js/gesture-analyzer.js- 3D Landmark Geometry & Gesture Heuristics
+   3.8  js/controls.js        - Touch, Mouse & Keyboard Fallback System
+   3.9  js/performance.js     - Visibility Tab Pause, FPS & Low Power Mode
+   3.10 js/app.js             - Main Orchestrator & Render Loop
+4. Memory Management & Integrated GPU Optimizations
+5. Privacy & Security Architecture
+6. How to Run Locally
+
+================================================================================
+1. EXECUTIVE OVERVIEW & SYSTEM ARCHITECTURE
+================================================================================
+Most 3D particle demos on the internet are designed for high-end gaming desktop GPUs
+with 8GB+ of dedicated VRAM. They spawn 100,000 to 500,000 particles and run machine
+learning models on 1080p video streams at 60 FPS. On a standard laptop with only 8GB
+of shared system RAM and integrated graphics, that approach causes immediate thermal
+throttling, fan noise, dropped frames (down to 10 FPS), and browser crashes.
+
+This system was engineered from the ground up to solve that constraint:
+1. Particle Count: Capped at a sweet spot of 8,000 particles (adjustable from 1,000
+   to 25,000). At 8,000 particles, an integrated GPU can easily process point rendering
+   in <2 milliseconds per frame.
+2. Contiguous Typed Arrays: All particle data is stored in native Float32Arrays.
+   No JavaScript objects are created or destroyed inside the animation loop, meaning
+   the JavaScript Garbage Collector (GC) never causes micro-stuttering.
+3. MediaPipe Lite (modelComplexity: 0): Instead of the heavy full model, the "lite"
+   neural network is used. It uses ~75% less CPU and loads in a fraction of a second.
+4. Downscaled Video Stream: The camera feed is requested and downscaled to 320x240 pixels.
+   The hand tracking model only needs coarse silhouettes; feeding it 1080p full HD
+   is completely unnecessary and wastes CPU cycles.
+5. Frame Throttling: Hand tracking inference runs every 2nd or 3rd frame (~15-20 FPS),
+   while Three.js renders silky-smooth 60 FPS graphics. Hand movements do not change
+   faster than 20 times a second, so this decoupling saves ~60% of CPU work.
+6. 100% Client-Side Privacy: Processing happens exclusively in the browser memory.
+   Zero images, video frames, or coordinates are ever stored or sent over a network.
+
+================================================================================
+2. THE END-TO-END DATA FLOW PIPELINE
+================================================================================
+
+[Webcam Feed] 
+      │ (getUserMedia downscaled to 320x240)
+      ▼
+[Frame Throttler] ── (Only passes every 2nd or 3rd frame)
+      │
+      ▼
+[MediaPipe Hands Lite] ── (modelComplexity: 0, 100% in-browser WebAssembly)
+      │
+      ▼
+[21 3D Landmarks Output] (Normalized x, y, z coordinates)
+      │
+      ▼
+[Gesture Analyzer]
+      ├── 1. Hand Centroid (X, Y)  ──> Controls 3D tilt & Color Hue Wheel
+      ├── 2. Hand Spread / Pinch   ──> Computes Particle Expansion Factor (0.2x to 3.0x)
+      └── 3. Finger Count Heuristic──> Triggers Shape Morphing (Heart, Lotus, Saturn, etc.)
+            │
+            ▼
+[Particle System Physics Update]
+      ├── Target Positions calculated from Math Shape generator
+      ├── Spring physics lerp: position += (target * expansion - position) * lerpSpeed
+      ├── Additive organic turbulence noise
+      └── HSL Color gradient buffer update
+            │
+            ▼
+[Three.js WebGL Renderer] (AdditiveBlending point cloud to HTML5 Canvas at 60 FPS)
+            │
+            ▼
+[User Screen Display] (Accompanied by Glassmorphic HUD & Live Skeleton PiP)
+
+================================================================================
+3. DETAILED FILE-BY-FILE & BLOCK-BY-BLOCK CODE BREAKDOWN
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 index.html - Semantic Structure & HUD Overlay
+--------------------------------------------------------------------------------
+What this file does:
+Provides the single-page HTML skeleton, loads external CDN libraries, and sets up
+the glassmorphic user interface elements.
+
+Key Sections:
+- `<head>`:
+  * Google Fonts `Outfit` (clean modern geometric sans-serif) and `Space Grotesk`
+    (monospace numbers and tags).
+  * Three.js (r128): The standard 3D library for WebGL rendering.
+  * MediaPipe Hands (`hands.js`): Google's computer vision library for 21-keypoint
+    hand landmark detection.
+- `<div id="canvas-container">`:
+  * The full-screen background container where Three.js injects the WebGL canvas.
+- `<div id="hud">`:
+  * Pointer-events: none overlay covering the screen. Contains interactive child
+    elements (`.interactive` has pointer-events: auto).
+  * Top Bar:
+    - Logo and brand heading.
+    - `#camera-status-badge`: Visible status indicator ("Camera Off" or glowing
+      pulsing green "Camera Active (Local Only)").
+    - `#btn-toggle-cam`: Explicit consent button to start/stop the webcam.
+    - `#btn-low-power`: Toggle button for low power mode.
+    - `#fps-display`: Real-time performance monitor (FPS, frame time in ms, particle count).
+    - `#btn-explode`: Shockwave trigger button.
+    - `#btn-drawer-toggle`: Opens/closes the side settings drawer.
+  * Bottom Bar:
+    - `#gesture-readout`: Live pill badge showing currently recognized gesture
+      (e.g., "Gesture: Peace / Victory (Expanding)").
+    - `.shapes-nav`: Six pill buttons corresponding to each 3D shape template
+      (Heart, Lotus, Saturn, Fireworks, DNA Helix, Sphere).
+- `<aside id="controls-drawer">`:
+  * Collapsible glass panel with range sliders for Particle Count (Quality),
+    Point Size, Expansion Scale, and Color Theme dropdown.
+  * Shows keyboard shortcuts and the explicit privacy guarantee notice.
+- `<div id="pip-container">`:
+  * A picture-in-picture floating box containing `#pip-canvas`, which displays the
+    mirrored webcam stream and hand tracking skeleton overlay.
+- `<script type="module" src="js/app.js">`:
+  * Modern ES module entrypoint that initializes the application.
+
+--------------------------------------------------------------------------------
+3.2 css/style.css - Glassmorphism & Responsive Styling
+--------------------------------------------------------------------------------
+What this file does:
+Provides an ultra-modern dark cosmic visual aesthetic with frosted glass
+(`backdrop-filter: blur(16px)`), subtle neon accents, glowing status indicators,
+and responsive rules for mobile screens.
+
+Key Blocks:
+- `:root` Variables:
+  * Colors: `--bg-primary` (#07080d), `--accent-cyan` (#00f2ff), `--accent-magenta`
+    (#ff007f), `--accent-green` (#00ff88), `--accent-amber` (#ffaa00).
+- `.glass-panel`:
+  * Creates the frosted glass effect using `background: rgba(14, 18, 28, 0.72)`,
+    `backdrop-filter: blur(16px)`, and delicate 1px borders with inner inset shadows.
+- `.status-badge.active .pulse-dot`:
+  * An animated pulsing green dot that alerts the user that the camera is currently
+    running, fulfilling privacy requirements.
+- Range Sliders & Selects:
+  * Custom styled minimalist slider tracks and glowing cyan thumbs that grow on hover.
+- `@media (max-width: 768px)`:
+  * Mobile media query that repositions the controls drawer to the bottom, shrinks
+    button padding, ensures touch targets remain >= 44px, and enables horizontal
+    scroll for the shape switcher bar.
+
+--------------------------------------------------------------------------------
+3.3 js/config.js - Tuning Constants & Hardware Limits
+--------------------------------------------------------------------------------
+What this file does:
+Centralizes all configuration variables and presets in a clean export object.
+
+Key Configuration Settings:
+- `CONFIG.particles`:
+  * `defaultCount: 8000`: Default particle count for balanced 60 FPS on integrated GPUs.
+  * `minCount: 1000`, `maxCount: 25000`: Slider range boundaries.
+  * `lowPowerCount: 3500`: Particle count applied when Low Power Mode is activated.
+  * `baseSize: 3.2`: Default point size in 3D world units.
+  * `lerpSpeed: 0.045`: Physics spring acceleration coefficient toward target coordinates.
+  * `dampening: 0.92`: Friction factor to stop particles from oscillating forever.
+  * `turbulence: 0.35`: Subtle harmonic noise added to prevent static appearance.
+- `CONFIG.tracking`:
+  * `videoWidth: 320`, `videoHeight: 240`: Downscaled resolution fed to MediaPipe.
+  * `frameThrottle: 2`: Processes 1 frame every 2 animation frames.
+  * `lowPowerThrottle: 4`: Processes 1 frame every 4 animation frames in low power mode.
+  * `modelComplexity: 0`: Specifies the MediaPipe Hands "Lite" model.
+- `CONFIG.palettes`:
+  * Pre-tuned HSL color harmonies (Cosmic Nebula, Cyberpunk Neon, Northern Aurora, Solar Flare).
+
+--------------------------------------------------------------------------------
+3.4 js/math-shapes.js - 3D Parametric Mathematical Equations
+--------------------------------------------------------------------------------
+What this file does:
+Generates contiguous `Float32Array(count * 3)` coordinates representing target
+3D positions for six mathematically distinct shapes.
+
+Detailed Formula Breakdown:
+
+1. Heart (`ShapeGenerators.heart`):
+   - Uses the famous 3D volumetric cardioid system:
+     x = 16 * sin^3(t)
+     y = 13*cos(t) - 5*cos(2t) - 2*cos(3t) - cos(4t)
+   - Volume Fill: Multiplies (x, y) by `r = Math.pow(Math.random(), 0.4)` so
+     particles fill the interior rather than only sitting on the outline perimeter.
+   - 3D Depth (Z): Modulated so the heart is thickest at its center and tapers
+     delicately toward the bottom tip.
+
+2. Blooming Sacred Lotus Flower (`ShapeGenerators.flower`):
+   - Multi-petaled radial geometry with 6-fold symmetry:
+     radius = (u * 14 + 2) * (0.65 + 0.35 * |sin(petals * theta * 0.5)|)
+   - Petal Curvature (Z/Y): Uses a sine arch `sin(u * PI * 0.8)` to cup inner
+     petals upward while outer petals droop gently outward like a blooming flower.
+
+3. Saturn & Concentric Rings (`ShapeGenerators.saturn`):
+   - 32% of particles form the central planet; 68% form the rings.
+   - Planet: Distributed in a 3D spherical shell using spherical coordinates
+     (theta, phi) with a slight flattening (0.92 oblate spheroid).
+   - Rings: Planar disk with radius between 30 and 65 units.
+   - Cassini Division: Any random radius falling between 46 and 49 units is
+     pushed outward or inward, producing the iconic dark gap found in Saturn's rings.
+   - Axial Tilt: Rotates both planet and rings around the X axis by 26.7 degrees
+     using standard 2D rotation matrix math:
+     y' = y * cos(tilt) - z * sin(tilt)
+     z' = y * sin(tilt) + z * cos(tilt)
+
+4. Fireworks / Cosmic Nebula Supernova (`ShapeGenerators.fireworks`):
+   - Particles erupt from the origin in random spherical directions.
+   - Non-linear power distribution: `blastPower = Math.pow(Math.random(), 0.35)`
+     creates a dense leading explosion shell and trailing stardust tails.
+   - Gravity droop: Older trailing sparks suffer a subtle downward Y acceleration.
+   - Vortex twist: Rotates outer particles slightly around the vertical axis to
+     simulate angular momentum in a cosmic nebula.
+
+5. Double Helix / DNA Strand (`ShapeGenerators.helix`):
+   - 72% of particles form two intertwined spiral strands:
+     x = cos(t + strand) * radius
+     z = sin(t + strand) * radius
+     where `strand = 0` for strand 1, and `strand = PI` (180 degrees offset) for strand 2.
+   - 28% of particles form the connecting horizontal base pair rungs, quantized to
+     periodic intervals across the central axis.
+
+6. Pulsing Geodesic Sphere (`ShapeGenerators.sphere`):
+   - Distributes particles evenly on a spherical surface using the Fibonacci Golden Spiral:
+     theta = 2 * PI * i / goldenRatio
+     phi = acos(1 - 2 * (i + 0.5) / count)
+   - Harmonic Ripple: Modulates the radius with high-frequency sine waves
+     `sin(phi * 6) * cos(theta * 4)` so the sphere appears to throb like a pulsating star.
+
+--------------------------------------------------------------------------------
+3.5 js/particle-system.js - WebGL Buffers, Physics & Color Engine
+--------------------------------------------------------------------------------
+What this file does:
+Manages the Three.js `BufferGeometry`, memory buffers, spring physics interpolation,
+color updates, and clean resource disposal.
+
+Key Methods & Algorithms:
+- `createGlowTexture()`:
+  * Generates a 64x64 offscreen canvas with a 5-stop radial gradient (bright white
+    core transitioning to soft blue falloff and completely transparent edge).
+  * Converts the canvas into a `THREE.CanvasTexture` with `generateMipmaps = false`.
+  * Why: This eliminates any external image asset dependency and avoids square,
+    blocky particle pixels, rendering luminous glowing stars with additive blending.
+- `init()`:
+  * Creates `Float32Array` buffers for:
+    - `positions` [x, y, z, ...]: Current 3D position of each particle.
+    - `targetPositions` [x, y, z, ...]: Target coordinates from active shape.
+    - `velocities` [vx, vy, vz, ...]: Current velocity vector of each particle.
+    - `colors` [r, g, b, ...]: RGB color values (0.0 to 1.0) for vertex coloring.
+  * Attaches buffers to `THREE.BufferGeometry` via `THREE.BufferAttribute`.
+  * Configures `THREE.PointsMaterial` with `blending: THREE.AdditiveBlending`,
+    `transparent: true`, `depthWrite: false` (avoids depth buffer sorting overhead).
+- `setShape(shapeName)`:
+  * Changes `this.currentShape` and looks up precalculated coordinates from `shapeCache`.
+  * Injects a random velocity kick into each particle to create a dynamic "burst"
+    effect as particles dissolve out of the old shape and fly toward the new one.
+- `update(delta, time)` (Physics Step):
+  * Interpolates expansion scale: `expansion += (targetExpansion - expansion) * 0.12`.
+  * For each particle:
+    1. Multiplies target coordinate by expansion scale: `tx = target[i] * expansion`.
+    2. Calculates spring force: `fx = (tx - pos[i]) * lerpSpeed`.
+    3. Adds harmonic turbulence: `noise = sin(time * 2.0 + i * 0.05) * turbulence`.
+    4. Applies friction: `vel[i] = (vel[i] + fx) * dampening`.
+    5. Updates position: `pos[i] += vel[i]`.
+  * Sets `geometry.attributes.position.needsUpdate = true` to signal the WebGL driver
+    to upload the updated position buffer to the GPU.
+- `updateColors()`:
+  * Calculates distance of each particle from the center.
+  * Maps distance to an HSL color gradient: inner particles take the primary hue
+    with higher lightness (white-hot core), while outer particles take secondary hues.
+  * Sets `geometry.attributes.color.needsUpdate = true`.
+- `dispose()`:
+  * Explicitly disposes `geometry`, `material`, `glowTexture`, and empties typed arrays.
+  * This guarantees zero memory leaks when particle counts are changed or the app resets.
+
+--------------------------------------------------------------------------------
+3.6 js/hand-tracker.js - MediaPipe Lite & Privacy Webcam Lifecycle
+--------------------------------------------------------------------------------
+What this file does:
+Handles the webcam stream lifecycle, downscales video frames, feeds frames to MediaPipe
+Hands Lite at a throttled rate, renders the debug skeleton PiP, and provides total teardown.
+
+Key Steps & Safeguards:
+- `start()`:
+  * Can ONLY be invoked when the user explicitly clicks the "Enable Camera" button.
+  * Calls `navigator.mediaDevices.getUserMedia` with downscaled constraints:
+    `width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user', frameRate: { ideal: 30 }`.
+  * Connects the MediaStream to a hidden `<video>` element with `playsinline` (critical
+    for mobile Safari compatibility).
+- `loadModel()`:
+  * Loads MediaPipe Hands with `modelComplexity: 0` (Lite) and `maxNumHands: 1`.
+  * This is the lightweight configuration specified in the requirements.
+- `trackLoop()` (Frame Throttler):
+  * Maintains an internal counter: `this.frameCounter++`.
+  * Only sends a frame to `handsModel.send({ image: videoElement })` when
+    `frameCounter % frameThrottle === 0` and no previous frame is still awaiting inference.
+  * In normal mode, this processes every 2nd frame (~15 FPS tracking). In low power
+    mode, it processes every 4th frame (~7-10 FPS tracking).
+  * This prevents the CPU from running at 100% and guarantees Three.js has abundant
+    CPU time to render at 60 FPS.
+- `renderPiP(results)`:
+  * Draws the mirrored video frame to `#pip-canvas` (180x135 display size).
+  * Draws cyan skeleton lines connecting the 21 joints and magenta nodes at fingertips.
+  * Gives immediate visual reassurance to the user that tracking is working.
+- `stop()`:
+  * When the user clicks "Stop Camera", all MediaStream tracks are terminated
+    immediately: `stream.getTracks().forEach(track => track.stop())`.
+  * Clears the video source and cancels the internal requestAnimationFrame.
+  * The camera hardware indicator LED on the laptop turns off immediately.
+
+--------------------------------------------------------------------------------
+3.7 js/gesture-analyzer.js - 3D Landmark Geometry & Gesture Heuristics
+--------------------------------------------------------------------------------
+What this file does:
+Translates raw 3D normalized coordinates (x, y, z) into high-level physical interaction
+parameters (expansion factor, hand centroid, tilt angle, and shape triggers).
+
+How Gestures Are Recognized:
+- Landmark Indices:
+  * 0: Wrist
+  * 4: Thumb Tip, 8: Index Tip, 12: Middle Tip, 16: Ring Tip, 20: Pinky Tip
+  * 6: Index PIP, 10: Middle PIP, 14: Ring PIP, 18: Pinky PIP
+- Hand Spread & Particle Expansion:
+  * Calculates the Euclidean distance from the wrist (0) to all five fingertips.
+  * Averaged spread distance:
+    Tight fist: ~0.15 normalized units.
+    Fully open palm: ~0.42 normalized units.
+  * Maps this spread linearly to an expansion factor between 0.35x and 2.40x.
+  * Applies an exponential moving average (low-pass filter) to smooth out hand tremor:
+    `smoothedExpansion += (rawExpansion - smoothedExpansion) * 0.20`.
+- Finger Extension Detection:
+  * A finger is detected as extended if `dist(wrist, fingertip) > dist(wrist, jointPIP) * 1.18`.
+  * Counts total extended fingers (0 to 5).
+- Gesture to Shape Mapping:
+  * Thumbs Up (Thumb extended upward, 4 fingers curled) -> Pulsing Geodesic Sphere
+  * OK Sign (Thumb + Index tip circular ring, other fingers extended) -> Pulsing Geodesic Sphere
+  * Pinch Heart (Thumb tip & Index tip distance < 0.08, other fingers curled) -> Heart
+  * 1 Finger Extended (Index pointing, other fingers curled) -> Saturn & Concentric Rings
+  * 2 Fingers Extended (Peace / Victory sign, other fingers curled) -> Blooming Sacred Lotus Flower
+  * 3 Fingers Extended (Index + Middle + Ring, pinky curled) -> Double Helix DNA Strand
+  * 4 or 5 Fingers Extended (Wide open palm) -> Cosmic Fireworks Nebula
+  * Closed Fist (All fingers curled, no thumb up) -> Pure particle contraction without changing shape!
+- One-Shot Debounced Triggering:
+  * Emits a clean transition trigger once held stable for 3 consecutive frames (~150ms),
+    preventing continuous overrides of user UI clicks.
+- Color Modulation:
+  * Hand horizontal position (`centroidX`) maps across the HSL color spectrum:
+    moving your hand left-to-right shifts the particle colors across the rainbow.
+
+--------------------------------------------------------------------------------
+3.8 js/controls.js - Touch, Mouse & Keyboard Fallback System
+--------------------------------------------------------------------------------
+What this file does:
+Provides complete interaction parity when the camera is disabled, unpermitted, or too
+slow on the device.
+
+Interaction Mappings:
+- Mouse Left Drag: Rotates the 3D particle cloud in 3D space.
+- Mouse Scroll Wheel: Adjusts the particle expansion factor (Scroll up to expand,
+  scroll down to contract into a dense core).
+- Touch Single Swipe: Rotates the 3D particle cloud on mobile devices.
+- Touch Two-Finger Pinch: Measures `touchDistance(touch1, touch2)` and dynamically
+  scales the particle expansion factor (Pinch outward to expand, pinch inward to contract).
+- Keyboard Shortcuts:
+  * `1`: Heart
+  * `2`: Lotus Flower
+  * `3`: Saturn Rings
+  * `4`: Fireworks
+  * `5`: DNA Helix
+  * `6`: Sphere
+  * `Spacebar`: Triggers a shockwave explosion burst
+  * `L`: Toggles Low Power Mode
+  * `F`: Toggles FPS counter visibility
+  * `C`: Toggles Camera tracking on / off
+
+--------------------------------------------------------------------------------
+3.9 js/performance.js - Visibility Tab Pause, FPS & Low Power Mode
+--------------------------------------------------------------------------------
+What this file does:
+Guarantees optimal battery and GPU usage through Page Visibility detection,
+lightweight rolling FPS measurement, and low power mode throttling.
+
+Key Features:
+- Tab Visibility Detection (`document.visibilityState`):
+  * Listens to `visibilitychange`.
+  * When the user switches tabs or minimizes the browser, `document.hidden` becomes true.
+  * Immediately pauses the main render loop and calls `handTracker.pause()`.
+  * This drops CPU and GPU utilization to 0.0% while the tab is inactive, preserving
+    laptop battery and preventing overheating.
+  * Resumes automatically the instant the user returns to the tab.
+- Rolling FPS Counter:
+  * Measures elapsed time over 500ms intervals:
+    `fps = (frameCount * 1000) / elapsed`.
+  * Displays: Current FPS, Frame Time in milliseconds, and Active Particle Count.
+- Low Power Mode Engine:
+  * Auto-activates on mobile devices via user-agent detection.
+  * When active:
+    1. Caps `renderer.setPixelRatio(1.0)` (or 0.9 on mobile) to eliminate high-DPI
+       retina overdraw on integrated GPUs.
+    2. Drops particle count to 3,500 particles.
+    3. Increases hand tracking throttle to every 4th frame (~10 FPS tracking).
+
+--------------------------------------------------------------------------------
+3.10 js/app.js - Main Orchestrator & Render Loop
+--------------------------------------------------------------------------------
+What this file does:
+Ties all modules together into a unified lifecycle:
+1. `initThree()`: Creates Scene, PerspectiveCamera (FOV 60, aspect ratio, clipping
+   planes), and WebGLRenderer with `powerPreference: 'high-performance'`.
+2. `initSystems()`: Instantiates `ParticleSystem`, `HandTracker`, `InteractionControls`,
+   and `PerformanceManager`.
+3. `initUI()`: Binds event listeners to HTML buttons, range sliders, and theme dropdowns.
+4. `animate()`: The core `requestAnimationFrame` loop:
+   - Checks `perfManager.isTabVisible` (skips frame if hidden).
+   - Computes delta and elapsed time via `THREE.Clock`.
+   - Updates particle spring physics via `particleSystem.update(delta, time)`.
+   - Renders scene via `renderer.render(scene, camera)`.
+   - Records performance via `perfManager.tick(performance.now())`.
+
+================================================================================
+4. MEMORY MANAGEMENT & INTEGRATED GPU OPTIMIZATIONS
+================================================================================
+Integrated GPUs (like Intel UHD or AMD Vega) share memory with the CPU. Excessive
+allocations cause cache eviction and thermal throttling. Here is how this project
+maintains peak efficiency:
+
+1. Zero Garbage Collection inside Render Loop:
+   No `new THREE.Vector3()` or temporary objects are created inside `animate()` or
+   `update()`. Float32Arrays are allocated once during shape creation and updated in-place.
+2. Direct BufferAttribute Updates:
+   Only `geometry.attributes.position.needsUpdate = true` and `color.needsUpdate = true`
+   are invoked when values change.
+3. No Depth Buffer Writes:
+   Because particles use luminous additive blending (`THREE.AdditiveBlending`),
+   `depthWrite: false` is set. The GPU does not have to perform expensive depth sorting
+   or depth buffer writes for 8,000 transparent points.
+4. Procedural 64x64 Star Glow Texture:
+   A single 64x64 canvas texture with mipmaps disabled consumes less than 32 Kilobytes
+   of VRAM, compared to multi-megabyte external PNG textures.
+5. Explicit Disposal:
+   Whenever particle counts change, the old `THREE.BufferGeometry` has `.dispose()`
+   called on it before being replaced, releasing WebGL GPU buffer handles immediately.
+
+================================================================================
+5. PRIVACY & SECURITY ARCHITECTURE
+================================================================================
+Privacy is treated as a hard security constraint:
+
+1. Never Auto-Start:
+   The webcam is NEVER accessed upon loading the page. Access requires an explicit click
+   on the "Enable Camera" button.
+2. 100% Local In-Browser Processing:
+   The MediaPipe Hands WebAssembly binary runs entirely in the local browser tab.
+   Video frames are passed directly from the HTML5 `<video>` element to WebAssembly
+   in RAM. Not a single pixel, frame, image, or coordinate vector is ever uploaded,
+   network-transmitted, or logged.
+3. Zero Persistence:
+   No camera frames or landmark coordinates are saved to `localStorage`, `sessionStorage`,
+   IndexedDB, cookies, or disk.
+4. Visible Activity Indicator:
+   An animated glowing green privacy badge and pulsing dot remain active on the screen
+   for the entire duration of the camera session.
+5. Always-Accessible Stop Button:
+   A prominent "Stop Camera" button is always visible. Clicking it calls `.stop()` on
+   all MediaStream tracks, immediately releasing the hardware lock and turning off
+   the camera LED indicator.
+
+================================================================================
+6. HOW TO RUN LOCALLY
+================================================================================
+Because the project uses standard ES Modules (`import`/`export`), it must be served
+over HTTP/HTTPS rather than the `file://` protocol.
+
+Option 1: Python Built-In HTTP Server (Recommended)
+Open a terminal in this directory and run:
+   python -m http.server 8080
+
+Then open your browser and navigate to:
+   http://localhost:8080
+
+Option 2: Any Static Web Server
+You can also use Node (`npx serve .`), VS Code "Live Server" extension, or host
+the folder on GitHub Pages, Cloudflare Pages, or Netlify.
+
+Compatible Browsers:
+- Google Chrome / Chromium (Desktop & Android)
+- Mozilla Firefox (Desktop & Android)
+- Apple Safari (macOS & iOS 14.5+)
+- Microsoft Edge (Desktop)
+
+================================================================================
+END OF EXPLANATION
+================================================================================

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="Real-time interactive 3D particle system in Three.js with MediaPipe hand tracking, smooth mathematical shape morphing, low power mode, and 100% client-side privacy.">
+  <meta name="theme-color" content="#07080d">
+  <title> 3D Interactive Particle System</title>
+
+  <!-- Google Fonts: Outfit & Space Grotesk -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Core Stylesheet -->
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- Three.js (r128) from reliable CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <!-- MediaPipe Hands (Lite model complexity) from JSDelivr CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <!-- Three.js WebGL Rendering Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- HUD Overlay -->
+  <div id="hud">
+    <!-- Top Header Bar -->
+    <header class="top-bar">
+      <div class="brand-section interactive">
+        <div class="logo-glow">✦</div>
+        <div>
+          <h1 class="brand-title">3D INTERACTIVE PARTICLE</h1>
+          <p class="brand-subtitle">THREE.JS // MEDIAPIPE LITE</p>
+        </div>
+      </div>
+
+      <!-- Action & Status Controls -->
+      <div class="header-actions interactive">
+        <!-- Live Privacy & Camera Status Indicator -->
+        <div id="camera-status-badge" class="status-badge inactive" title="Privacy: 100% In-Browser. No video frames are ever recorded or sent anywhere.">
+          <span class="status-dot"></span>
+          <span>Camera Off</span>
+        </div>
+
+        <!-- Camera Start / Stop Button -->
+        <button id="btn-toggle-cam" class="btn btn-primary" title="Toggle Webcam Hand Tracking">
+          Enable Camera
+        </button>
+
+        <!-- Low Power Mode Toggle -->
+        <button id="btn-low-power" class="btn" title="Toggle Low Power Mode for Battery / Integrated GPU">
+          ⚡ Low Power: OFF
+        </button>
+
+        <!-- Real-time FPS Counter Pill -->
+        <div id="fps-display" class="fps-display" title="Performance Metric">
+          <span class="metric-fps">60 <small>FPS</small></span>
+          <span class="metric-sep">|</span>
+          <span class="metric-ms">16.6 <small>ms</small></span>
+          <span class="metric-sep">|</span>
+          <span class="metric-count">8,000 <small>pts</small></span>
+        </div>
+
+        <!-- Explode Shockwave Button -->
+        <button id="btn-explode" class="btn btn-icon" title="Trigger Shockwave Burst (Spacebar)">
+          💥
+        </button>
+
+        <!-- Toggle Controls Drawer -->
+        <button id="btn-drawer-toggle" class="btn btn-icon" title="Customize Settings & Sliders">
+          ⚙️
+        </button>
+      </div>
+    </header>
+
+    <!-- Bottom Shape Switcher & Gesture Readout Bar -->
+    <footer class="bottom-bar">
+      <!-- Live Gesture Recognition Readout -->
+      <div id="gesture-readout" class="gesture-pill interactive">
+        Gestures: Standby (Use Mouse/Touch)
+      </div>
+
+      <!-- Shape Template Selector Pills -->
+      <nav class="shapes-nav interactive" aria-label="3D Particle Shapes">
+        <button class="shape-btn active" data-shape="heart" title="Cardioid 3D Volumetric Heart (Key: 1, Gesture: Pinch)">
+          <span class="shape-icon">❤️</span> Heart
+        </button>
+        <button class="shape-btn" data-shape="flower" title="Sacred Blooming Lotus Flower (Key: 2, Gesture: Peace ✌️)">
+          <span class="shape-icon">🌸</span> Lotus
+        </button>
+        <button class="shape-btn" data-shape="saturn" title="Saturn & Concentric Rings (Key: 3, Gesture: Point ☝️)">
+          <span class="shape-icon">🪐</span> Saturn
+        </button>
+        <button class="shape-btn" data-shape="fireworks" title="Cosmic Supernova Nebula (Key: 4, Gesture: Open Hand 🖐️)">
+          <span class="shape-icon">🎆</span> Fireworks
+        </button>
+        <button class="shape-btn" data-shape="helix" title="Double Helix DNA Strand (Key: 5, Gesture: 3 Fingers)">
+          <span class="shape-icon">🧬</span> DNA Helix
+        </button>
+        <button class="shape-btn" data-shape="sphere" title="Pulsing Geodesic Sphere (Key: 6, Gesture: Thumbs Up 👍 or OK 👌)">
+          <span class="shape-icon">🔮</span> Sphere
+        </button>
+      </nav>
+    </footer>
+  </div>
+
+  <!-- Collapsible Controls Drawer (Floating Panel) -->
+  <aside id="controls-drawer" class="controls-drawer glass-panel interactive collapsed">
+    <div class="drawer-header">
+      <h2 class="drawer-title">Particle Controls</h2>
+    </div>
+
+    <!-- Particle Quality Slider -->
+    <div class="control-group">
+      <div class="control-label-row">
+        <span>Particle Quality</span>
+        <span id="label-particle-count" class="control-value">8,000</span>
+      </div>
+      <input type="range" id="slider-particle-count" min="1000" max="25000" step="500" value="8000">
+    </div>
+
+    <!-- Particle Size Slider -->
+    <div class="control-group">
+      <div class="control-label-row">
+        <span>Point Size</span>
+        <span id="label-particle-size" class="control-value">3.2</span>
+      </div>
+      <input type="range" id="slider-particle-size" min="1.0" max="8.0" step="0.2" value="3.2">
+    </div>
+
+    <!-- Expansion / Contraction Slider -->
+    <div class="control-group">
+      <div class="control-label-row">
+        <span>Expansion Scale</span>
+        <span id="label-expansion" class="control-value">1.0x</span>
+      </div>
+      <input type="range" id="slider-expansion" min="0.2" max="3.0" step="0.05" value="1.0">
+    </div>
+
+    <!-- Color Theme Palette Select -->
+    <div class="control-group">
+      <div class="control-label-row">
+        <span>Color Theme</span>
+      </div>
+      <select id="select-palette" class="custom-select">
+        <option value="nebula">Cosmic Nebula (Violet / Cyan)</option>
+        <option value="cyberpunk">Cyberpunk Neon (Pink / Cyan)</option>
+        <option value="aurora">Northern Aurora (Emerald / Indigo)</option>
+        <option value="solar">Solar Flare (Gold / Crimson)</option>
+      </select>
+    </div>
+
+    <!-- Shortcuts & Fallback Instructions -->
+    <div class="shortcuts-hint">
+      <div class="shortcut-row">
+        <span>Rotate View</span>
+        <span class="key-tag">Drag Mouse / Touch</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Expand / Contract</span>
+        <span class="key-tag">Scroll Wheel / Pinch</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Shockwave Blast</span>
+        <span class="key-tag">Spacebar / 💥</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Switch Shapes</span>
+        <span class="key-tag">Keys 1 – 6</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Low Power Mode</span>
+        <span class="key-tag">Key L</span>
+      </div>
+    </div>
+
+    <!-- Strict Privacy Notice -->
+    <div class="privacy-badge-box">
+      <span>🔒</span>
+      <div>
+        <strong>100% Client-Side Privacy:</strong>
+        Webcam frames are processed locally inside your browser via MediaPipe Lite. Zero video frames or coordinates are ever uploaded or saved.
+      </div>
+    </div>
+  </aside>
+
+  <!-- Picture-in-Picture Webcam Debug Skeleton Thumbnail -->
+  <div id="pip-container" class="pip-container interactive">
+    <div class="pip-header">
+      <span>LOCAL TRACKER</span>
+      <button id="btn-pip-minimize" class="btn-icon" title="Minimize / Expand Camera Preview">_</button>
+    </div>
+    <canvas id="pip-canvas" width="320" height="240"></canvas>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast-notification" class="toast"></div>
+
+  <!-- Application Entrypoint ES Module -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
